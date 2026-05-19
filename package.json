@@ -4,9 +4,8 @@
     "@mariozechner/pi-coding-agent": "^0.73.0"
   },
   "pi": {
-    "": "",
     "extensions": [
-      "./src/index.ts"
+      "./index.ts"
     ]
   }
 }
