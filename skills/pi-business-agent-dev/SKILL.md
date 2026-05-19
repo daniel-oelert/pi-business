@@ -1,5 +1,5 @@
 ---
-name: agent-dev
+name: pi-business-agent-dev
 description: |
   Develop new features for the pi-business Pi agent extension. Covers the
   permission gate, subagent tool, internal design patterns, and how to add
@@ -28,7 +28,7 @@ extension at `.pi/extensions/pi-business/`. It provides:
 ```
 .pi/extensions/pi-business/
 ├── index.ts                   # Entry point — wires all features
-├── package.json               # Depends on @mariozechner/pi-coding-agent ^0.73.0
+├── package.json               # Depends on @earendil-works/pi-coding-agent ^0.75.1
 ├── skills/
 │   └── subagent.md            # Skill: how the parent orchestrator uses subagents
 └── src/
@@ -552,7 +552,7 @@ Two locations, merged with project overriding user:
 | `.pi/alias.json` | Higher (project-level) |
 
 The user-level path is resolved via `getAgentDir()` from
-`@mariozechner/pi-coding-agent` (typically `~/.pi/agent/`).
+`@earendil-works/pi-coding-agent` (typically `~/.pi/agent/`).
 
 ```json
 {
@@ -642,9 +642,9 @@ model: alias/medium
 Create `src/new-feature.ts`:
 
 ```typescript
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import { Container, Text } from "@mariozechner/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 
 export function initNewTool(pi: ExtensionAPI) {
     pi.registerTool({

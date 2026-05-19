@@ -5,7 +5,7 @@
  * so that future additions to the extension can extend this module.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { BashPermissionRequestedEvent, BashPermissionResponseEvent } from "./types";
 import { BASH_PERMISSION_REQUESTED, BASH_PERMISSION_RESPONSE } from "./types";
 

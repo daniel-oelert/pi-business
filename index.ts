@@ -1,6 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { init as permissionGateInit } from "./src/permission-gate";
 import { initSubagentTool } from "./src/subagent-tool";
 import { initModelAliases } from "./src/model-aliases";

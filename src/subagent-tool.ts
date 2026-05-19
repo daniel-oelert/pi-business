@@ -9,7 +9,7 @@
  *   - Single: { agent: "name", task: "..." }
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AuthStorage,
   createAgentSession,
@@ -18,10 +18,10 @@ import {
   SessionManager,
   SettingsManager,
   type ResourceLoader,
-} from "@mariozechner/pi-coding-agent";
-import { type Api, type Model } from "@mariozechner/pi-ai";
-import { getMarkdownTheme } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+} from "@earendil-works/pi-coding-agent";
+import { type Api, type Model } from "@earendil-works/pi-ai";
+import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 import { type AgentConfig, discoverAgents } from "./subagent-config";
@@ -72,10 +72,12 @@ function getFinalOutput(messages: any[]): string {
 }
 
 function formatTokens(count: number): string {
-  if (count < 1000) return count.toString();
-  if (count < 10000) return `${(count / 1000).toFixed(1)}k`;
-  if (count < 1000000) return `${Math.round(count / 1000)}k`;
-  return `${(count / 1000000).toFixed(1)}M`;
+  const abs = Math.abs(count);
+  const sign = count < 0 ? "-" : "";
+  if (abs < 1000) return count.toString();
+  if (abs < 10000) return `${sign}${(abs / 1000).toFixed(1)}k`;
+  if (abs < 1000000) return `${sign}${Math.round(abs / 1000)}k`;
+  return `${sign}${(abs / 1000000).toFixed(1)}M`;
 }
 
 function formatUsage(usage: UsageStats, model?: string): string {

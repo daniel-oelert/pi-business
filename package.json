@@ -1,7 +1,14 @@
 {
   "name": "pi-business",
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
   "dependencies": {
-    "@mariozechner/pi-coding-agent": "^0.73.0"
+    "@earendil-works/pi-coding-agent": "^0.75.3"
+  },
+  "devDependencies": {
+    "vitest": "^3.2.4"
   },
   "pi": {
     "extensions": [

@@ -13,12 +13,11 @@
  * to real models before any API call is made.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
-import { getAgentDir } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { findNearestAncestorPath } from "./utils.js";
-import { stringify } from "node:querystring";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
