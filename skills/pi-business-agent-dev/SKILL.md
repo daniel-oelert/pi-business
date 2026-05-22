@@ -332,10 +332,10 @@ subagent tool called { agent: "reviewer", task: "Review auth.ts" }
   ├─ discoverAgents(ctx.cwd)          → finds all *.md from ~/.pi/agent/agents/ + .pi/agents/
   ├─ agents.find("reviewer")          → look up agent config
   ├─ resolveModel(ctx.modelRegistry, agent.model)
-  ├─ createAgentSession({ ... })      → isolated session, no extensions/skills/prompts
+  ├─ createAgentSession({ ... })      → isolated session, inherits host extensions
   │   ├─ SessionManager.inMemory()    → no file I/O, pure in-memory
   │   ├─ SettingsManager.inMemory({ compaction: false })
-  │   └─ ResourceLoader: systemPrompt = agent.systemPrompt only
+  │   └─ DefaultResourceLoader: same cwd, host extensions, no skills/prompts/themes
   │
   ├─ session.subscribe(...)           → collect messages and usage
   ├─ await session.prompt(task)        → block until complete
@@ -344,26 +344,29 @@ subagent tool called { agent: "reviewer", task: "Review auth.ts" }
 
 ### Isolated session setup
 
-The subagent gets a completely clean session — no extensions, no skills, no
-prompts, no AGENTS.md files. Only the agent's system prompt and the requested
-tools. This is achieved with a minimal `ResourceLoader`:
+The subagent gets an isolated session that inherits the host's extensions but
+keeps skills, prompts, themes, and context files blocked. Only the agent's
+system prompt and the requested tools apply. Extensions are loaded via
+`DefaultResourceLoader` with the same working directory as the host and the
+default agent directory:
 
 ```typescript
-const resourceLoader: ResourceLoader = {
-    getExtensions: () => ({ extensions: [], errors: [], runtime: createExtensionRuntime() }),
-    getSkills:       () => ({ skills: [], diagnostics: [] }),
-    getPrompts:      () => ({ prompts: [], diagnostics: [] }),
-    getThemes:       () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles:  () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => agent.systemPrompt,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-};
+const resourceLoader = new DefaultResourceLoader({
+    cwd: effectiveCwd,
+    agentDir: getAgentDir(),
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: agent.systemPrompt,
+});
+await resourceLoader.reload();
 ```
 
-Every method returns empty except `getSystemPrompt` which returns the agent's
-markdown body.
+Extensions (both project-scoped from `.pi/extensions/` and user-scoped from
+`~/.pi/agent/extensions/`) are discovered and loaded. Skills, prompts, themes,
+and AGENTS.md are kept isolated to prevent the subagent from receiving
+orchestration skills like `pi-subagents`.
 
 ### Model resolution
 
@@ -1062,10 +1065,10 @@ variable.
 
 ### Isolated subagent sessions
 
-Subagents get completely clean SDK sessions. The key design decisions:
+Subagents get isolated SDK sessions that inherit host extensions but keep skills, prompts, themes, and context files blocked. The key design decisions:
 
 1. **In-memory only** — `SessionManager.inMemory()`, no file I/O
-2. **No extensions** — prevents subagent tools/extensions from interfering
+2. **Host extensions** — subagents load the same extensions as the host via `DefaultResourceLoader`. Skills, prompts, themes, and context files remain isolated to prevent orchestration skills from leaking in
 3. **No context files** — subagents don't read AGENTS.md
 4. **No skills** — only the agent's own system prompt applies
 5. **Parent abort propagation** — `signal.addEventListener("abort", ...)`
@@ -1139,7 +1142,7 @@ When extending the subagent system, this skill may need updates if:
 | `createAgentSession` | subagent-tool.ts | Create isolated subagent session |
 | `SessionManager.inMemory()` | subagent-tool.ts | Ephemeral session (no disk I/O) |
 | `SettingsManager.inMemory({...})` | subagent-tool.ts | In-memory settings |
-| `createExtensionRuntime` | subagent-tool.ts | Empty extension runtime for ResourceLoader |
+| `DefaultResourceLoader` | subagent-tool.ts | Resource loader with host extensions, isolated skills/prompts/themes |
 | `getAgentDir` | subagent-config.ts | User-level agents directory path |
 | `parseFrontmatter` | subagent-config.ts | Parse YAML frontmatter from .md files |
 | `getMarkdownTheme` | subagent-tool.ts | Theme for Markdown rendering in TUI |

@@ -13,11 +13,11 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import {
   AuthStorage,
   createAgentSession,
-  createExtensionRuntime,
+  DefaultResourceLoader,
+  getAgentDir,
   ModelRegistry,
   SessionManager,
   SettingsManager,
-  type ResourceLoader,
 } from "@earendil-works/pi-coding-agent";
 import { type Api, type Model } from "@earendil-works/pi-ai";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
@@ -169,22 +169,19 @@ async function runSingleAgent(
     compaction: { enabled: false },
     retry: { enabled: true, maxRetries: 2 },
   });
+  
+  const effectiveCwd = ctx.cwd;
 
-  const resourceLoader: ResourceLoader = {
-    getExtensions: () => ({
-      extensions: [],
-      errors: [],
-      runtime: createExtensionRuntime(),
-    }),
-    getSkills: () => ({ skills: [], diagnostics: [] }),
-    getPrompts: () => ({ prompts: [], diagnostics: [] }),
-    getThemes: () => ({ themes: [], diagnostics: [] }),
-    getAgentsFiles: () => ({ agentsFiles: [] }),
-    getSystemPrompt: () => agent.systemPrompt,
-    getAppendSystemPrompt: () => [],
-    extendResources: () => {},
-    reload: async () => {},
-  };
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: effectiveCwd,
+    agentDir: getAgentDir(),
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    systemPrompt: agent.systemPrompt,
+  });
+  await resourceLoader.reload();
 
   const toolNames: string[] = agent.tools ?? [
     "read",
@@ -193,8 +190,6 @@ async function runSingleAgent(
     "write",
     "question",
   ];
-
-  const effectiveCwd = ctx.cwd;
 
   const { session } = await createAgentSession({
     cwd: effectiveCwd,
