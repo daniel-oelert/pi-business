@@ -35,6 +35,7 @@ extension at `.pi/extensions/pi-business/`. It provides:
     ├── types.ts               # Shared event constants and interfaces
     ├── ui.ts                  # Centralized UI — all dialogs funnel through here
     ├── permission-gate.ts     # Tool_call interceptor for dangerous bash
+    ├── question-tool.ts       # Agent-facing question tool for user input
     ├── subagent-tool.ts       # Custom "subagent" tool + agent runner
     ├── subagent-config.ts     # Agent discovery from markdown files
     └── model-aliases.ts       # Model alias resolution (alias/large → real model)
@@ -46,6 +47,7 @@ The entry point (`index.ts`) is minimal — it calls `init` functions:
 export default function (pi: ExtensionAPI) {
     initModelAliases(pi);
     permissionGateInit(pi);
+    initQuestionTool(pi);
     initSubagentTool(pi);
 }
 ```
@@ -64,6 +66,9 @@ permission gate uses this currently, but the pattern is designed to be extended:
 export const BASH_PERMISSION_REQUESTED = "pibusiness:bash_permission_requested";
 export const BASH_PERMISSION_RESPONSE  = "pibusiness:bash_permission_response";
 
+export const QUESTION_REQUESTED = "pibusiness:question_requested";
+export const QUESTION_RESPONSE  = "pibusiness:question_response";
+
 export interface BashPermissionRequestedEvent {
     requestId: string;
     command: string;
@@ -73,6 +78,19 @@ export interface BashPermissionResponseEvent {
     requestId: string;
     allowed: boolean;
     reason?: string;
+}
+
+export interface QuestionRequestedEvent {
+    requestId: string;
+    question: string;
+    options: string[];
+    allowCustomAnswer: boolean;
+}
+
+export interface QuestionResponseEvent {
+    requestId: string;
+    answer: string | null;
+    cancelled: boolean;
 }
 ```
 
@@ -775,7 +793,224 @@ export function initMyCommand(pi: ExtensionAPI) {
 
 ---
 
-## 8. Internal Design Patterns
+## 8. Question Tool (`src/question-tool.ts`)
+
+### What it does
+
+Registers a custom tool named `question` that lets the agent ask the user a
+multiple-choice question with an optional free-text answer. The agent calls it
+when it needs user clarification to proceed (e.g., choosing between approaches,
+confirming a decision, or providing missing details).
+
+```
+question({ question: "Pick an approach", options: ["Option A", "Option B"], allowCustomAnswer: true })
+```
+
+The user picks an option or types a custom answer. The tool returns the
+selected string, with rich `details` on the result for TUI rendering.
+
+### Architecture — event-bus pattern
+
+The question tool follows the same event-bus request/response pattern as the
+permission gate (Section 3). The tool emits a `QUESTION_REQUESTED` event and
+waits for `QUESTION_RESPONSE`:
+
+```
+question-tool.ts                  ui.ts
+────────────────                  ──────
+execute()                         pi.events.on(QUESTION_REQUESTED)
+  │                                  │
+  ├─ emit REQUEST ──────────────────►│
+  │                                  ├─ uiChain.then(...)
+  │                                  │  └─ ctx.ui.select(options + "Other…")
+  │                                  │     └─ if "Other…": ctx.ui.input()
+  │                                  │        └─ emit RESPONSE
+  │◄─────────────────────────────────┘
+  │
+  └─ resolve({ content, details })
+```
+
+Unlike the permission gate (which blocks tool execution), the question tool
+returns its answer as a tool result so the agent can incorporate the user's
+input into subsequent turns.
+
+### Key implementation details
+
+**Request ID generation** uses timestamp + random suffix (same pattern as
+permission-gate):
+
+```typescript
+function generateRequestId(): string {
+    return `question-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+}
+```
+
+**Response matching** filters by `requestId` so parallel question calls don't
+cross wires:
+
+```typescript
+const unsub = pi.events.on(QUESTION_RESPONSE, (data) => {
+    const response = data as QuestionResponseEvent;
+    if (response.requestId !== requestId) return;
+    unsub(); clearTimeout(timer);
+    // ... resolve with answer or cancelled state
+});
+```
+
+**Timeout guard** — rejects after 5 minutes if the UI never responds (e.g.,
+headless mode):
+
+```typescript
+const timer = setTimeout(() => {
+    unsub();
+    reject(new Error("Question timed out after 5 minutes."));
+}, 5 * 60 * 1000);
+```
+
+Note: this rejects (agent sees an error) rather than resolving with a
+cancelled result like the permission gate timeout does.
+
+**Custom answer detection** — if the selected answer is not in the original
+options array and `allowCustomAnswer` was not false, `details.wasCustom` is
+set to `true`:
+
+```typescript
+resolve({
+    content: [{ type: "text", text: `Answer: ${response.answer}` }],
+    details: {
+        question: params.question,
+        options,
+        answer: response.answer,
+        cancelled: false,
+        wasCustom: !options.includes(response.answer) && allowCustomAnswer,
+    } satisfies QuestionToolDetails,
+});
+```
+
+### QuestionToolDetails
+
+Stored on the tool result for rendering and state tracking:
+
+```typescript
+export interface QuestionToolDetails {
+    question: string;
+    options: string[];
+    answer: string | null;
+    cancelled: boolean;
+    wasCustom?: boolean;
+    timedOut?: boolean;
+}
+```
+
+### TUI rendering
+
+**Call rendering** (`renderCall`) shows a bold "question" label with the
+question text (truncated to 60 chars) and the first 4 options:
+
+```typescript
+renderCall(args, theme, _context) {
+    const a = args as QuestionParamsInput | undefined;
+    const q = a?.question || "...";
+    const preview = q.length > 60 ? `${q.slice(0, 60)}...` : q;
+    let text = theme.fg("toolTitle", theme.bold("question ")) +
+               theme.fg("accent", preview);
+    const opts = Array.isArray(a?.options) ? a.options : [];
+    if (opts.length > 0) {
+        const labels = opts.slice(0, 4)
+            .map((o, i) => `${i + 1}. ${o}`)
+            .join(", ");
+        const more = opts.length > 4 ? ` +${opts.length - 4} more` : "";
+        text += `\n  ${theme.fg("dim", `Options: ${labels}${more}`)}`;
+    }
+    return new Text(text, 0, 0);
+}
+```
+
+**Result rendering** (`renderResult`) shows different states:
+
+| State | Display |
+|---|---|
+| No details | Falls back to `content[0].text` or `"(no output)"` |
+| Timed out | ⏱ Timed out (5 min) in warning color |
+| Cancelled / no answer | "Cancelled" in warning color |
+| Custom answer | `(wrote) answer` in muted + accent |
+| Listed answer | `N. answer` in accent with checkmark |
+
+### Subagent integration
+
+The question tool exports `createQuestionToolDef(pi)` which returns a raw tool
+definition suitable for passing to `createAgentSession({ customTools: [...] })`.
+The `question` tool is included in the default tool set for subagents:
+
+```typescript
+const toolNames = agent.tools ?? ["read", "bash", "edit", "write", "question"];
+```
+
+Subagents running in headless or automated contexts should use `question`
+sparingly — there is no user to answer. When configuring agents for fully
+automated workflows, omit `question` from their `tools` frontmatter.
+
+### Parameter schema
+
+```typescript
+const QuestionParams = Type.Object({
+    question: Type.String({
+        description: "The question to ask the user",
+    }),
+    options: Type.Array(Type.String(), {
+        description:
+            "Available options to present to the user. The user can also type " +
+            "a custom answer if allowCustomAnswer is true.",
+    }),
+    allowCustomAnswer: Type.Optional(
+        Type.Boolean({
+            description:
+                "Whether the user can type a custom answer instead of selecting " +
+                "an option. Default: true.",
+        }),
+    ),
+});
+```
+
+At least one option is required — calling with an empty options array throws.
+
+### UI handler (in ui.ts)
+
+The question dialog handler in `ui.ts` follows the same `uiChain` serialization
+pattern as the permission gate (Section 4):
+
+1. Listens for `QUESTION_REQUESTED` events
+2. Chains onto `uiChain` for serialization
+3. Guards with `activeCtx.hasUI`
+4. Calls `activeCtx.ui.select(options.concat("Other…"))` when `allowCustomAnswer`
+   is true, or just the options when false
+5. If the user picks "Other…", calls `activeCtx.ui.input()` for free-text input
+6. Emits `QUESTION_RESPONSE` with the answer or cancelled state
+7. Catches errors with a fallback cancelled response
+
+### question vs ui.select
+
+| Aspect | `question` tool | `ui.select` (event-bus) |
+|---|---|---|
+| Trigger | Agent calls the tool directly | Extension code calls `ctx.ui.select()` |
+| Timing | During agent execution (returns answer to agent) | Before/during tool execution (gating) |
+| Caller | LLM (via tool call) | Extension module (e.g., permission-gate.ts) |
+| Serialization | uiChain in the UI handler | uiChain in the UI handler |
+| Flexibility | Multiple-choice + optional free-text | Any TUI dialog type |
+| Primary use case | Agent needs user clarification | Extension gates/confirms a tool call |
+| Registration | `pi.registerTool({...})` | Event constants in `types.ts` + handler in `ui.ts` |
+
+### Exports
+
+| Export | Purpose |
+|---|---|
+| `initQuestionTool(pi)` | Register the question tool on the main extension API |
+| `createQuestionToolDef(pi)` | Return raw tool definition for subagent `customTools` |
+| `QuestionToolDetails` | Interface for result details (TUI rendering + state tracking) |
+| `QuestionParamsInput` | Input interface for the tool parameters |
+
+
+## 9. Internal Design Patterns
 
 ### Event bus decoupling
 
@@ -846,7 +1081,7 @@ const toolNames = agent.tools ?? ["read", "bash", "edit", "write"];
 
 ---
 
-## 9. Subagent Skill (`skills/subagent.md`)
+## 10. Subagent Skill (`skills/subagent.md`)
 
 The extension ships with a skill at `skills/subagent.md` that teaches the
 parent orchestrator agent how to use subagents effectively. This skill is
@@ -870,7 +1105,7 @@ When extending the subagent system, this skill may need updates if:
 
 ---
 
-## 10. Key Pi APIs Used by pi-business
+## 11. Key Pi APIs Used by pi-business
 
 ### Extension API
 
@@ -926,7 +1161,7 @@ When extending the subagent system, this skill may need updates if:
 
 ---
 
-## 11. Differences from Official Pi Subagent Example
+## 12. Differences from Official Pi Subagent Example
 
 The official Pi subagent example at
 `pi/examples/extensions/subagent/` spawns a separate `pi` OS process for each
@@ -945,7 +1180,7 @@ install, but requires careful session isolation via `ResourceLoader`.
 
 ---
 
-## 12. Current Limitations
+## 13. Current Limitations
 
 - **Subagent tool is single-agent only** — no parallel execution, no chains, no
   async mode. These would require extending `SubagentParams`, `runSingleAgent`,
