@@ -9,10 +9,14 @@ import { describe, it, expect } from "vitest";
 import {
   BASH_PERMISSION_REQUESTED,
   BASH_PERMISSION_RESPONSE,
+  QUESTION_REQUESTED,
+  QUESTION_RESPONSE,
 } from "../types";
 import type {
   BashPermissionRequestedEvent,
   BashPermissionResponseEvent,
+  QuestionRequestedEvent,
+  QuestionResponseEvent,
 } from "../types";
 
 describe("Event constants", () => {
@@ -110,5 +114,111 @@ describe("Event round-trip consistency", () => {
     };
     expect(response.allowed).toBe(false);
     expect(response.reason).toContain("UI Error");
+  });
+});
+
+// ── Question Event Constants ─────────────────────────────────────────────
+
+describe("Question event constants", () => {
+  it("QUESTION_REQUESTED uses correct pibusiness prefix", () => {
+    expect(QUESTION_REQUESTED).toBe("pibusiness:question_requested");
+    expect(QUESTION_REQUESTED.startsWith("pibusiness:")).toBe(true);
+  });
+
+  it("QUESTION_RESPONSE uses correct pibusiness prefix", () => {
+    expect(QUESTION_RESPONSE).toBe("pibusiness:question_response");
+    expect(QUESTION_RESPONSE.startsWith("pibusiness:")).toBe(true);
+  });
+
+  it("request and response are different constants", () => {
+    expect(QUESTION_REQUESTED).not.toBe(QUESTION_RESPONSE);
+  });
+
+  it("both constants are non-empty strings", () => {
+    expect(QUESTION_REQUESTED.length).toBeGreaterThan(0);
+    expect(QUESTION_RESPONSE.length).toBeGreaterThan(0);
+  });
+});
+
+// ── Question Event Interfaces ────────────────────────────────────────────
+
+describe("QuestionRequestedEvent interface shape", () => {
+  it("requires requestId, question, options, and allowCustomAnswer", () => {
+    const event: QuestionRequestedEvent = {
+      requestId: "q-123",
+      question: "What color do you prefer?",
+      options: ["Red", "Blue", "Green"],
+      allowCustomAnswer: true,
+    };
+    expect(typeof event.requestId).toBe("string");
+    expect(typeof event.question).toBe("string");
+    expect(Array.isArray(event.options)).toBe(true);
+    expect(event.options.length).toBe(3);
+    expect(event.allowCustomAnswer).toBe(true);
+  });
+
+  it("allowCustomAnswer can be false to prevent custom answers", () => {
+    const event: QuestionRequestedEvent = {
+      requestId: "q-456",
+      question: "Confirm delete?",
+      options: ["Yes", "No"],
+      allowCustomAnswer: false,
+    };
+    expect(event.allowCustomAnswer).toBe(false);
+  });
+});
+
+describe("QuestionResponseEvent interface shape", () => {
+  it("requires requestId, answer, and cancelled", () => {
+    const event: QuestionResponseEvent = {
+      requestId: "q-789",
+      answer: "Blue",
+      cancelled: false,
+    };
+    expect(typeof event.requestId).toBe("string");
+    expect(event.answer).toBe("Blue");
+    expect(event.cancelled).toBe(false);
+  });
+
+  it("answer can be null when cancelled", () => {
+    const event: QuestionResponseEvent = {
+      requestId: "q-cancelled",
+      answer: null,
+      cancelled: true,
+    };
+    expect(event.answer).toBeNull();
+    expect(event.cancelled).toBe(true);
+  });
+});
+
+describe("Question event round-trip consistency", () => {
+  it("requestId matches between request and response", () => {
+    const requestId = "question-1234567890-abc";
+
+    const request: QuestionRequestedEvent = {
+      requestId,
+      question: "What's your favorite?",
+      options: ["A", "B", "C"],
+      allowCustomAnswer: true,
+    };
+
+    const response: QuestionResponseEvent = {
+      requestId,
+      answer: "B",
+      cancelled: false,
+    };
+
+    expect(response.requestId).toBe(request.requestId);
+    expect(response.answer).toBe("B");
+  });
+
+  it("response can indicate cancellation", () => {
+    const response: QuestionResponseEvent = {
+      requestId: "q-cancel",
+      answer: null,
+      cancelled: true,
+    };
+    expect(response.cancelled).toBe(true);
+    expect(response.answer).toBeNull();
   });
 });

@@ -6,8 +6,18 @@
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import type { BashPermissionRequestedEvent, BashPermissionResponseEvent } from "./types";
-import { BASH_PERMISSION_REQUESTED, BASH_PERMISSION_RESPONSE } from "./types";
+import type {
+  BashPermissionRequestedEvent,
+  BashPermissionResponseEvent,
+  QuestionRequestedEvent,
+  QuestionResponseEvent,
+} from "./types";
+import {
+  BASH_PERMISSION_REQUESTED,
+  BASH_PERMISSION_RESPONSE,
+  QUESTION_REQUESTED,
+  QUESTION_RESPONSE,
+} from "./types";
 
 export function initUI(pi: ExtensionAPI) {
 	let activeCtx: ExtensionContext | null = null;
@@ -47,6 +57,75 @@ export function initUI(pi: ExtensionAPI) {
 						reason: "UI Error: " + ((error as Error).message ?? "Unknown error"),
 					} satisfies BashPermissionResponseEvent);
 				}
+			}
+		});
+	});
+
+	pi.events.on(QUESTION_REQUESTED, (data) => {
+		const request = data as QuestionRequestedEvent;
+
+		uiChain = uiChain.then(async () => {
+			if (activeCtx && activeCtx.hasUI) {
+				try {
+					const choices = [...request.options];
+					if (request.allowCustomAnswer) {
+						choices.push("Other (type my own answer)");
+					}
+
+					const choice = await activeCtx.ui.select(
+						request.question,
+						choices
+					);
+
+					if (choice === undefined) {
+						// User cancelled (esc or timed out)
+						pi.events.emit(QUESTION_RESPONSE, {
+							requestId: request.requestId,
+							answer: null,
+							cancelled: true,
+						} satisfies QuestionResponseEvent);
+						return;
+					}
+
+					if (choice === "Other (type my own answer)") {
+						const customAnswer = await activeCtx.ui.input(
+							"Type your answer:",
+							"Your custom answer…"
+						);
+						if (customAnswer === undefined || customAnswer.trim() === "") {
+							pi.events.emit(QUESTION_RESPONSE, {
+								requestId: request.requestId,
+								answer: null,
+								cancelled: true,
+							} satisfies QuestionResponseEvent);
+						} else {
+							pi.events.emit(QUESTION_RESPONSE, {
+								requestId: request.requestId,
+								answer: customAnswer.trim(),
+								cancelled: false,
+							} satisfies QuestionResponseEvent);
+						}
+					} else {
+						pi.events.emit(QUESTION_RESPONSE, {
+							requestId: request.requestId,
+							answer: choice,
+							cancelled: false,
+						} satisfies QuestionResponseEvent);
+					}
+				} catch (error) {
+					pi.events.emit(QUESTION_RESPONSE, {
+						requestId: request.requestId,
+						answer: null,
+						cancelled: true,
+					} satisfies QuestionResponseEvent);
+				}
+			} else {
+				// No UI available (headless / print mode)
+				pi.events.emit(QUESTION_RESPONSE, {
+					requestId: request.requestId,
+					answer: null,
+					cancelled: true,
+				} satisfies QuestionResponseEvent);
 			}
 		});
 	});

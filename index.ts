@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { init as permissionGateInit } from "./src/permission-gate";
 import { initSubagentTool } from "./src/subagent-tool";
 import { initModelAliases } from "./src/model-aliases";
+import { initQuestionTool } from "./src/question-tool";
 
 export default function (pi: ExtensionAPI) {
     const skillsDir = join(dirname(fileURLToPath(import.meta.url)), "skills");
@@ -19,4 +20,5 @@ export default function (pi: ExtensionAPI) {
     initModelAliases(pi);
     permissionGateInit(pi);
     initSubagentTool(pi);
+    initQuestionTool(pi);
 }

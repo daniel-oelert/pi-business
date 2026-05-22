@@ -26,6 +26,7 @@ import { Type } from "typebox";
 
 import { type AgentConfig, discoverAgents } from "./subagent-config";
 import { resolveAliasTarget } from "./model-aliases";
+import { createQuestionToolDef } from "./question-tool";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -135,6 +136,7 @@ async function runSingleAgent(
   agentName: string,
   task: string,
   signal: AbortSignal | undefined,
+  customTools?: any[],
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -189,6 +191,7 @@ async function runSingleAgent(
     "bash",
     "edit",
     "write",
+    "question",
   ];
 
   const effectiveCwd = ctx.cwd;
@@ -199,6 +202,7 @@ async function runSingleAgent(
     thinkingLevel: "off",
     resourceLoader,
     tools: toolNames,
+    customTools: customTools ?? [],
     sessionManager: SessionManager.inMemory(),
     settingsManager,
   });
@@ -306,6 +310,8 @@ const SubagentParams = Type.Object({
 // ── Tool Registration ──────────────────────────────────────────────────────
 
 export function initSubagentTool(pi: ExtensionAPI) {
+  const questionToolDef = createQuestionToolDef(pi);
+
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
@@ -345,6 +351,7 @@ export function initSubagentTool(pi: ExtensionAPI) {
         params.agent,
         params.task,
         signal,
+        [questionToolDef],
       );
 
       const isError =
