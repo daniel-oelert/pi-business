@@ -36,7 +36,7 @@ extension at `.pi/extensions/pi-business/`. It provides:
     ├── ui.ts                  # Centralized UI — all dialogs funnel through here
     ├── permission-gate.ts     # Tool_call interceptor for dangerous bash
     ├── question-tool.ts       # Agent-facing question tool for user input
-    ├── subagent-tool.ts       # Custom "subagent" tool + agent runner
+    ├── subagent-tool.ts       # Custom "subagent" tool + agent runner + event bridge
     ├── subagent-config.ts     # Agent discovery from markdown files
     └── model-aliases.ts       # Model alias resolution (alias/large → real model)
 ```
@@ -100,6 +100,105 @@ share a `requestId` so concurrent requests don't cross wires.
 **To add a new event pair**, define constants and interfaces here following the
 same `request/response` pattern, then use `pi.events.emit()` and
 `pi.events.on()` in the sender/receiver modules.
+
+---
+
+## 2b. Subagent Event Bridging (`subagent-tool.ts` bridge section)
+
+### Problem
+
+When pi-business is loaded inside a subagent session (via `createAgentSession`),
+the subagent gets its own isolated `pi.events` event bus. The subagent's copy
+of `permission-gate.ts` and `question-tool.ts` emit UI-bound events on the
+subagent's local event bus — but the subagent has no UI context to display
+dialogs (`activeCtx.hasUI` is always false in subagent sessions).
+
+### Why module-level state doesn't work
+
+The extension loader uses JITI with `moduleCache: false`, meaning each
+`jiti.import()` call creates fresh module instances. When the host and
+subagent both load pi-business, they get separate module instances. A module-level
+variable (like `bridge.ts` with a `hostEventBus` getter/setter) would NOT be
+shared between them.
+
+### Solution: Bridging Event Bus
+
+The bridge is set up entirely in `subagent-tool.ts` using the SDK's
+`DefaultResourceLoaderOptions.eventBus` option. Instead of trying to access
+the subagent's internal event bus, we create the bus ourselves, set up
+forwarding, and inject it into the resource loader:
+
+```typescript
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import {
+  BASH_PERMISSION_REQUESTED, BASH_PERMISSION_RESPONSE,
+  QUESTION_REQUESTED, QUESTION_RESPONSE,
+} from "./types";
+
+// In runSingleAgent():
+
+// 1. Create the subagent's event bus
+const subagentBus = createEventBus();
+const bridgeCleanups: (() => void)[] = [];
+
+if (hostEvents) {
+  // 2. Forward UI requests from subagent → host
+  bridgeCleanups.push(
+    subagentBus.on(BASH_PERMISSION_REQUESTED, (data) => {
+      hostEvents.emit(BASH_PERMISSION_REQUESTED, data);
+    }),
+    subagentBus.on(QUESTION_REQUESTED, (data) => {
+      hostEvents.emit(QUESTION_REQUESTED, data);
+    }),
+    // 3. Forward responses from host → subagent
+    hostEvents.on(BASH_PERMISSION_RESPONSE, (data) => {
+      subagentBus.emit(BASH_PERMISSION_RESPONSE, data);
+    }),
+    hostEvents.on(QUESTION_RESPONSE, (data) => {
+      subagentBus.emit(QUESTION_RESPONSE, data);
+    }),
+  );
+}
+
+// 4. Inject the bus into the resource loader so extensions use it as pi.events
+const resourceLoader = new DefaultResourceLoader({
+  // ...
+  eventBus: subagentBus,
+});
+
+// 5. Clean up in finally
+for (const cleanup of bridgeCleanups) cleanup();
+```
+
+### Event flow
+
+```
+Subagent calls bash()
+  → permission-gate.ts emits BASH_PERMISSION_REQUESTED on subagentBus
+  → bridge forwards to hostEvents
+  → host's ui.ts (hasUI=true) shows dialog
+  → host emits BASH_PERMISSION_RESPONSE on hostEvents
+  → bridge forwards to subagentBus
+  → permission-gate.ts receives response
+
+Subagent calls question()
+  → question-tool.ts (loaded by extension) emits QUESTION_REQUESTED on subagentBus
+  → bridge forwards to hostEvents
+  → host's ui.ts shows the question dialog
+  → host emits QUESTION_RESPONSE on hostEvents
+  → bridge forwards to subagentBus
+  → question-tool.ts receives answer
+```
+
+The same mechanism works for arbitrary nesting (sub-sub-agents): each
+level forwards to its parent, and responses cascade back down.
+
+### ui.ts behavior in subagents
+
+`ui.ts` is unchanged — when `hasUI` is false, both handlers simply do
+nothing. The bridge handles all forwarding. If no host is available
+(truly headless root), the 5-minute timeout in `permission-gate.ts` and
+`question-tool.ts` handles the dead letter.
 
 ---
 

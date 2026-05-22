@@ -58,6 +58,10 @@ export function initUI(pi: ExtensionAPI) {
 					} satisfies BashPermissionResponseEvent);
 				}
 			}
+			// When hasUI is false (subagent or headless), do nothing.
+			// The event bus bridge in subagent-tool.ts forwards the request
+			// to the host's event bus. If there's no host (truly headless),
+			// permission-gate.ts times out after 5 minutes.
 		});
 	});
 
@@ -119,14 +123,11 @@ export function initUI(pi: ExtensionAPI) {
 						cancelled: true,
 					} satisfies QuestionResponseEvent);
 				}
-			} else {
-				// No UI available (headless / print mode)
-				pi.events.emit(QUESTION_RESPONSE, {
-					requestId: request.requestId,
-					answer: null,
-					cancelled: true,
-				} satisfies QuestionResponseEvent);
 			}
+			// When hasUI is false (subagent or headless), do nothing.
+			// The event bus bridge in subagent-tool.ts forwards the request
+			// to the host's event bus. If there's no host (truly headless),
+			// the question tool times out after 5 minutes.
 		});
 	});
 }

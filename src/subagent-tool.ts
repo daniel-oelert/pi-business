@@ -9,10 +9,11 @@
  *   - Single: { agent: "name", task: "..." }
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { EventBus, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AuthStorage,
   createAgentSession,
+  createEventBus,
   DefaultResourceLoader,
   getAgentDir,
   ModelRegistry,
@@ -26,7 +27,12 @@ import { Type } from "typebox";
 
 import { type AgentConfig, discoverAgents } from "./subagent-config";
 import { resolveAliasTarget } from "./model-aliases";
-import { createQuestionToolDef } from "./question-tool";
+import {
+  BASH_PERMISSION_REQUESTED,
+  BASH_PERMISSION_RESPONSE,
+  QUESTION_REQUESTED,
+  QUESTION_RESPONSE,
+} from "./types";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
@@ -136,7 +142,7 @@ async function runSingleAgent(
   agentName: string,
   task: string,
   signal: AbortSignal | undefined,
-  customTools?: any[],
+  hostEvents?: EventBus | null,
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -172,6 +178,33 @@ async function runSingleAgent(
   
   const effectiveCwd = ctx.cwd;
 
+  // Create a bridging event bus that forwards UI-bound events from the
+  // subagent to the host's event bus, and forwards responses back.
+  // The subagent's extensions (pi-business) use this bus as pi.events.
+  // This way, when the subagent's permission-gate.ts or question-tool.ts
+  // emit a request, it reaches the host's ui.ts for user interaction.
+  const subagentBus = createEventBus();
+  const bridgeCleanups: (() => void)[] = [];
+
+  if (hostEvents) {
+    // Forward requests from subagent to host
+    bridgeCleanups.push(
+      subagentBus.on(BASH_PERMISSION_REQUESTED, (data) => {
+        hostEvents.emit(BASH_PERMISSION_REQUESTED, data);
+      }),
+      subagentBus.on(QUESTION_REQUESTED, (data) => {
+        hostEvents.emit(QUESTION_REQUESTED, data);
+      }),
+      // Forward responses from host to subagent
+      hostEvents.on(BASH_PERMISSION_RESPONSE, (data) => {
+        subagentBus.emit(BASH_PERMISSION_RESPONSE, data);
+      }),
+      hostEvents.on(QUESTION_RESPONSE, (data) => {
+        subagentBus.emit(QUESTION_RESPONSE, data);
+      }),
+    );
+  }
+
   const resourceLoader = new DefaultResourceLoader({
     cwd: effectiveCwd,
     agentDir: getAgentDir(),
@@ -180,6 +213,7 @@ async function runSingleAgent(
     noThemes: true,
     noContextFiles: true,
     systemPrompt: agent.systemPrompt,
+    eventBus: subagentBus,
   });
   await resourceLoader.reload();
 
@@ -197,7 +231,6 @@ async function runSingleAgent(
     thinkingLevel: "off",
     resourceLoader,
     tools: toolNames,
-    customTools: customTools ?? [],
     sessionManager: SessionManager.inMemory(),
     settingsManager,
   });
@@ -282,6 +315,8 @@ async function runSingleAgent(
     if (signal && abortHandler) {
       signal.removeEventListener("abort", abortHandler);
     }
+    // Tear down the event bus bridge
+    for (const cleanup of bridgeCleanups) cleanup();
     // Dispose session
     try {
       session.dispose();
@@ -305,7 +340,6 @@ const SubagentParams = Type.Object({
 // ── Tool Registration ──────────────────────────────────────────────────────
 
 export function initSubagentTool(pi: ExtensionAPI) {
-  const questionToolDef = createQuestionToolDef(pi);
 
   pi.registerTool({
     name: "subagent",
@@ -346,7 +380,7 @@ export function initSubagentTool(pi: ExtensionAPI) {
         params.agent,
         params.task,
         signal,
-        [questionToolDef],
+        pi.events,
       );
 
       const isError =
