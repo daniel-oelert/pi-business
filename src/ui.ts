@@ -93,7 +93,9 @@ export function initUI(pi: ExtensionAPI) {
 
 					if (choice === "Other (type my own answer)") {
 						const customAnswer = await activeCtx.ui.input(
-							"Type your answer:",
+							`${request.question}
+
+Type your answer:`,
 							"Your custom answer…"
 						);
 						if (customAnswer === undefined || customAnswer.trim() === "") {
