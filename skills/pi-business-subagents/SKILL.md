@@ -8,11 +8,9 @@ description: |
   planning, or execution.
 ---
 
-# Pi Subagents
+# Pi Business Subagents
 
-This skill is for the main parent orchestrator only. Do not inject or follow it inside spawned child subagents. The parent session owns delegation, orchestration, review fanout, and final fix-worker launches; child subagents should receive concrete role-specific tasks and should not run their own subagent workflows.
-
-Use this skill when the parent orchestrator needs to launch a specialized subagent, compose multiple agents into a workflow, or create/edit agents and chains on demand.
+Use this skill when you need to launch a specialized subagent, compose multiple agents into a workflow, or create/edit agents and chains on demand.
 
 ## When to Use
 
@@ -463,8 +461,11 @@ The `subagent(...)` tool also supports management actions.
 ### List available agents and chains
 
 ```typescript
-subagent({ action: "list" })
+list_subagents({})
 ```
+
+This is a standalone tool (registered alongside `subagent`) that lists
+all discovered agents with their names, descriptions, sources, and models.
 
 ### Create an agent
 
@@ -706,7 +707,7 @@ Use saved `.chain.md` workflows when the user wants a repeatable multi-agent flo
 
 **"Unknown agent"**
 ```typescript
-subagent({ action: "list" })
+list_subagents({})
 // Check available agents and chains, then confirm scope/precedence.
 ```
 

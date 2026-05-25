@@ -12,6 +12,9 @@ import * as path from "node:path";
 import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import { findNearestProjectAgentsDir } from "./utils.js";
 
+/** Maximum allowed length for agent descriptions in characters. */
+export const MAX_DESCRIPTION_LENGTH = 1000;
+
 export interface AgentConfig {
   name: string;
   description: string;
@@ -68,9 +71,15 @@ function loadAgentsFromDir(
       .map((t: string) => t.trim())
       .filter(Boolean);
 
+    // Enforce maximum description length
+    let description = frontmatter.description;
+    if (description.length > MAX_DESCRIPTION_LENGTH) {
+      description = description.slice(0, MAX_DESCRIPTION_LENGTH);
+    }
+
     agents.push({
       name: frontmatter.name,
-      description: frontmatter.description,
+      description,
       tools: tools && tools.length > 0 ? tools : undefined,
       model: frontmatter.model,
       systemPrompt: body,

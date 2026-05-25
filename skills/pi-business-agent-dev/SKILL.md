@@ -579,6 +579,58 @@ Theme colors used:
 | `"success"` | Success icon |
 | `"toolOutput"` | Output preview in collapsed view |
 
+### list_subagents tool
+
+In addition to the main `subagent` tool, `initSubagentTool()` also registers a
+companion tool named `list_subagents` that the LLM can call to discover
+available agents:
+
+```typescript
+pi.registerTool({
+    name: "list_subagents",
+    label: "List Subagents",
+    description:
+      "List all available subagents with their names, descriptions, " +
+      "source locations, and configured models.",
+    parameters: Type.Object({}),  // no required parameters
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+        const discovery = discoverAgents(ctx.cwd);
+        return {
+            content: [{ type: "text", text: formattedList }],
+            details: { agents: [...], projectAgentsDir: "..." },
+        };
+    },
+    renderCall(...) { ... },
+    renderResult(...) { ... },
+});
+```
+
+**Parameter schema:** Empty object — the tool takes no required parameters.
+
+**Output format:** Each agent is listed as `**name** (source) [model]: description`.
+If no agents are found, a helpful message points to the expected directories.
+
+**Result rendering:**
+- **Collapsed:** `✓ N subagents: name1, name2, name3`
+- **Expanded:** Each agent on its own indented line showing name, source,
+  model, and description.
+
+**Exported types:**
+
+```typescript
+export interface ListedAgent {
+    name: string;
+    description: string;
+    source: "user" | "project";
+    model?: string;
+}
+
+export interface ListedAgentsDetails {
+    agents: ListedAgent[];
+    projectAgentsDir: string | null;
+}
+```
+
 ---
 
 ## 6. Agent Discovery (`src/subagent-config.ts`)
@@ -617,9 +669,11 @@ format), `thinking`, `systemPromptMode`.
 ### AgentConfig interface
 
 ```typescript
+export const MAX_DESCRIPTION_LENGTH = 1000;
+
 interface AgentConfig {
     name: string;            // from frontmatter "name"
-    description: string;     // from frontmatter "description"
+    description: string;     // from frontmatter "description" — truncated to MAX_DESCRIPTION_LENGTH (1000 chars) if longer
     tools?: string[];        // parsed from comma-separated frontmatter "tools"
     model?: string;          // from frontmatter "model"
     systemPrompt: string;    // markdown body after frontmatter
@@ -627,6 +681,12 @@ interface AgentConfig {
     filePath: string;
 }
 ```
+
+**Description length enforcement:** Agent descriptions exceeding
+`MAX_DESCRIPTION_LENGTH` (1000 characters) are silently truncated during
+discovery. The truncation is character-based (JavaScript `slice`), not
+byte-based, so Unicode characters are preserved correctly. Descriptions of
+exactly 1000 characters or fewer are kept as-is.
 
 ### Adding frontmatter fields
 

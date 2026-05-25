@@ -405,6 +405,83 @@ describe("discoverAgents — file edge cases", () => {
 });
 
 // ────────────────────────────────────────────────────────────────────────────
+// discoverAgents — description length enforcement (MAX_DESCRIPTION_LENGTH = 1000)
+// ────────────────────────────────────────────────────────────────────────────
+
+describe("discoverAgents — description length enforcement", () => {
+  let tmpDir: string;
+  let agentsDir: string;
+
+  beforeEach(() => {
+    tmpDir = path.join(os.tmpdir(), `pi-business-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    agentsDir = path.join(tmpDir, ".pi", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("truncates descriptions longer than 1000 characters", () => {
+    const longDesc = "A".repeat(2000);
+    writeAgentMarkdown(agentsDir, "toolong.md",
+      { name: "toolong", description: longDesc }, "Body.");
+
+    const result = discoverAgents(agentsDir);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].description.length).toBe(1000);
+    expect(result.agents[0].description).toBe("A".repeat(1000));
+  });
+
+  it("keeps descriptions of exactly 1000 characters unchanged", () => {
+    const exactDesc = "B".repeat(1000);
+    writeAgentMarkdown(agentsDir, "exact.md",
+      { name: "exact", description: exactDesc }, "Body.");
+
+    const result = discoverAgents(agentsDir);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].description.length).toBe(1000);
+    expect(result.agents[0].description).toBe(exactDesc);
+  });
+
+  it("keeps descriptions shorter than 1000 characters unchanged", () => {
+    const shortDesc = "Short description";
+    writeAgentMarkdown(agentsDir, "short.md",
+      { name: "short", description: shortDesc }, "Body.");
+
+    const result = discoverAgents(agentsDir);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].description).toBe(shortDesc);
+  });
+
+  it("truncates descriptions that are just over 1000 characters", () => {
+    const overDesc = "C".repeat(1001);
+    writeAgentMarkdown(agentsDir, "barelyover.md",
+      { name: "barelyover", description: overDesc }, "Body.");
+
+    const result = discoverAgents(agentsDir);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].description.length).toBe(1000);
+    expect(result.agents[0].description).toBe("C".repeat(1000));
+  });
+
+  it("truncates Unicode descriptions longer than 1000 characters at character boundary", () => {
+    // Use ñ (U+00F1) — 1 JS char, 2 UTF-8 bytes — to verify it's character-based
+    const char = "ñ";
+    expect(char.length).toBe(1); // single JS char
+    const longDesc = char.repeat(2000);
+    writeAgentMarkdown(agentsDir, "unicode-long.md",
+      { name: "unicodelong", description: longDesc }, "Body.");
+
+    const result = discoverAgents(agentsDir);
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].description.length).toBe(1000);
+    expect(result.agents[0].description).toBe(char.repeat(1000));
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
 // discoverAgents — project-over-user override
 // ────────────────────────────────────────────────────────────────────────────
 

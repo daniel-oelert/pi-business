@@ -326,6 +326,20 @@ async function runSingleAgent(
   }
 }
 
+// ── List Subagents Types ─────────────────────────────────────────────────
+
+export interface ListedAgent {
+  name: string;
+  description: string;
+  source: "user" | "project";
+  model?: string;
+}
+
+export interface ListedAgentsDetails {
+  agents: ListedAgent[];
+  projectAgentsDir: string | null;
+}
+
 // ── Parameter Schema ───────────────────────────────────────────────────────
 
 const SubagentParams = Type.Object({
@@ -516,6 +530,103 @@ export function initSubagentTool(pi: ExtensionAPI) {
       if (finalOutput.length > 200)
         text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
       return new Text(text, 0, 0);
+    },
+  });
+
+  // ── list_subagents Tool ────────────────────────────────────────────
+
+  const ListSubagentsParams = Type.Object({});
+
+  pi.registerTool({
+    name: "list_subagents",
+    label: "List Subagents",
+    description:
+      "List all available subagents with their names, descriptions, " +
+      "source locations, and configured models.",
+    parameters: ListSubagentsParams,
+
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const discovery = discoverAgents(ctx.cwd);
+      const agents = discovery.agents;
+
+      const listed = agents.map((a) => ({
+        name: a.name,
+        description: a.description,
+        source: a.source,
+        model: a.model,
+      } satisfies ListedAgent));
+
+      if (listed.length === 0) {
+        return {
+          content: [{ type: "text", text: "No subagents found. Create agent markdown files in ~/.pi/agent/agents/ or .pi/agents/." }],
+          details: { agents: [], projectAgentsDir: discovery.projectAgentsDir } satisfies ListedAgentsDetails,
+        };
+      }
+
+      const lines = listed.map(
+        (a) =>
+          `**${a.name}** (${a.source})${a.model ? ` [${a.model}]` : ""}: ${a.description}`,
+      );
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { agents: listed, projectAgentsDir: discovery.projectAgentsDir } satisfies ListedAgentsDetails,
+      };
+    },
+
+    renderCall(_args, theme, _context) {
+      return new Text(
+        theme.fg("toolTitle", theme.bold("list_subagents")),
+        0,
+        0,
+      );
+    },
+
+    renderResult(result, { expanded }, theme, _context) {
+      const details = result.details as ListedAgentsDetails | undefined;
+      if (!details) {
+        const text = result.content?.[0];
+        return new Text(
+          text?.type === "text" ? text.text : "(no output)",
+          0,
+          0,
+        );
+      }
+
+      if (details.agents.length === 0) {
+        return new Text(theme.fg("muted", "No subagents found."), 0, 0);
+      }
+
+      const icon = theme.fg("success", "✓");
+      const countStr = `${details.agents.length} subagent${details.agents.length !== 1 ? "s" : ""}`;
+
+      if (expanded) {
+        const container = new Container();
+        const header = `${icon} ${theme.fg("toolTitle", theme.bold(countStr))} available`;
+        container.addChild(new Text(header, 0, 0));
+        container.addChild(new Spacer(1));
+
+        for (const a of details.agents) {
+          const sourceLabel = theme.fg("muted", ` (${a.source})`);
+          const modelLabel = a.model
+            ? ` ${theme.fg("dim", `[${a.model}]`)}`
+            : "";
+          const line = `  ${theme.fg("accent", theme.bold(a.name))}${sourceLabel}${modelLabel}`;
+          container.addChild(new Text(line, 0, 0));
+          container.addChild(
+            new Text(`    ${theme.fg("dim", a.description)}`, 0, 0),
+          );
+        }
+        return container;
+      }
+
+      // Collapsed
+      const names = details.agents.map((a) => a.name).join(", ");
+      return new Text(
+        `${icon} ${theme.fg("toolTitle", theme.bold(countStr))}: ${theme.fg("dim", names)}`,
+        0,
+        0,
+      );
     },
   });
 }
