@@ -225,13 +225,18 @@ async function runSingleAgent(
     "question",
   ];
 
+  const parentSessionFile = ctx.sessionManager.getSessionFile();
+  const sessionManager = parentSessionFile
+    ? SessionManager.create(effectiveCwd, parentSessionFile.replace(/\.jsonl$/, ""))
+    : SessionManager.inMemory();
+
   const { session } = await createAgentSession({
     cwd: effectiveCwd,
     model,
     thinkingLevel: "off",
     resourceLoader,
     tools: toolNames,
-    sessionManager: SessionManager.inMemory(),
+    sessionManager,
     settingsManager,
   });
 
