@@ -169,7 +169,7 @@ async function runSingleAgent(
 
   // ── Set up isolated session ─────────────────────────────────────────────
 
-  const model = resolveModel(ctx.modelRegistry, agent.model);
+  const model = resolveModel(ctx.modelRegistry, agent.model) ?? ctx.model;
 
   const settingsManager = SettingsManager.inMemory({
     compaction: { enabled: false },
