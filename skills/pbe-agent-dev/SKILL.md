@@ -1,11 +1,9 @@
 ---
-name: pi-business-agent-dev
+name: pbe-agent-dev
 description: |
   Develop new features for the pi-business Pi agent extension. Covers the
   permission gate, subagent tool, internal design patterns, and how to add
   new capabilities.
-metadata:
-  version: "2.0"
 ---
 
 # Pi-Business Extension Development
@@ -30,10 +28,12 @@ extension at `.pi/extensions/pi-business/`. It provides:
 ├── index.ts                   # Entry point — wires all features
 ├── package.json               # Depends on @earendil-works/pi-coding-agent ^0.75.1
 ├── skills/
-│   └── subagent.md            # Skill: how the parent orchestrator uses subagents
+│   ├── pbe-agent-dev/         # Skill: how the develop the pi-business extension
+│   └── pbe-subagents/         # Skill: how the parent orchestrator uses subagents
 └── src/
     ├── types.ts               # Shared event constants and interfaces
     ├── ui.ts                  # Centralized UI — all dialogs funnel through here
+    ├── utils.ts               # Common components, e.g. finding next .pi folder
     ├── permission-gate.ts     # Tool_call interceptor for dangerous bash
     ├── question-tool.ts       # Agent-facing question tool for user input
     ├── subagent-tool.ts       # Custom "subagent" tool + agent runner + event bridge
@@ -63,11 +63,11 @@ The extension uses a typed event bus for inter-module communication. Only the
 permission gate uses this currently, but the pattern is designed to be extended:
 
 ```typescript
-export const BASH_PERMISSION_REQUESTED = "pibusiness:bash_permission_requested";
-export const BASH_PERMISSION_RESPONSE  = "pibusiness:bash_permission_response";
+export const BASH_PERMISSION_REQUESTED = "pbe:bash_permission_requested";
+export const BASH_PERMISSION_RESPONSE  = "pbe:bash_permission_response";
 
-export const QUESTION_REQUESTED = "pibusiness:question_requested";
-export const QUESTION_RESPONSE  = "pibusiness:question_response";
+export const QUESTION_REQUESTED = "pbe:question_requested";
+export const QUESTION_RESPONSE  = "pbe:question_response";
 
 export interface BashPermissionRequestedEvent {
     requestId: string;
@@ -94,7 +94,7 @@ export interface QuestionResponseEvent {
 }
 ```
 
-**Convention:** Event names use a `pibusiness:` prefix. Request/response pairs
+**Convention:** Event names use a `pbe:` prefix. Request/response pairs
 share a `requestId` so concurrent requests don't cross wires. 
 
 **To add a new event pair**, define constants and interfaces here following the
@@ -263,51 +263,6 @@ const timer = setTimeout(() => {
 
 **Blocking return value** — `tool_call` handlers can return `{ block: true,
 reason: "..." }` to prevent execution.
-
-### Adding more command patterns to the gate
-
-To add new dangerous patterns, modify the condition in `permission-gate.ts`.
-The current implementation checks all bash commands, but there's no pattern
-filter in the emit — it gates every bash call. To add pattern-specific gating,
-add a check before emitting:
-
-```typescript
-const dangerousPatterns = [
-    /\brm\s+(-rf?|--recursive)/i,
-    /\bsudo\b/i,
-    /\b(chmod|chown)\b.*777/i,
-    /\bmkfs\b/i,  // new pattern
-];
-
-const isDangerous = dangerousPatterns.some(p => p.test(command));
-if (!isDangerous) return undefined;  // allow non-dangerous commands through
-```
-
-### Adding a new permission check
-
-To gate a different tool (e.g., `write` to protected files), add a new
-`tool_call` case to `permission-gate.ts`:
-
-```typescript
-pi.on("tool_call", async (event, ctx) => {
-    // Existing: bash gate
-    if (event.toolName === "bash") { /* ... */ }
-
-    // New: write gate for protected files
-    if (event.toolName === "write") {
-        const filePath = event.input.path as string;
-        if (filePath.includes(".env") || filePath.includes("credentials")) {
-            const requestId = generateRequestId();
-            pi.events.emit("pibusiness:write_permission_requested", {
-                requestId, path: filePath,
-            });
-            // ... same request/response pattern
-        }
-    }
-});
-```
-
-Then add corresponding event constants to `types.ts` and a handler in `ui.ts`.
 
 ---
 

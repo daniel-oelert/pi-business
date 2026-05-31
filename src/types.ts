@@ -1,9 +1,9 @@
 
-export const BASH_PERMISSION_REQUESTED : string = "pibusiness:bash_permission_requested";
-export const BASH_PERMISSION_RESPONSE : string = "pibusiness:bash_permission_response";
+export const BASH_PERMISSION_REQUESTED : string = "pbe:bash_permission_requested";
+export const BASH_PERMISSION_RESPONSE : string = "pbe:bash_permission_response";
 
-export const QUESTION_REQUESTED : string = "pibusiness:question_requested";
-export const QUESTION_RESPONSE : string = "pibusiness:question_response";
+export const QUESTION_REQUESTED : string = "pbe:question_requested";
+export const QUESTION_RESPONSE : string = "pbe:question_response";
 
 export interface BashPermissionRequestedEvent {
     requestId: string;

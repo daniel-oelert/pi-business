@@ -9,7 +9,7 @@
  *   - Single: { agent: "name", task: "..." }
  */
 
-import type { EventBus, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, EventBus, ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   AuthStorage,
   createAgentSession,
@@ -24,9 +24,12 @@ import { type Api, type Model } from "@earendil-works/pi-ai";
 import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import * as fs from "node:fs";
+import * as path from "node:path";
 
 import { type AgentConfig, discoverAgents } from "./subagent-config";
 import { resolveAliasTarget } from "./model-aliases";
+import { findNearestAncestorPath } from "./utils.js";
 import {
   BASH_PERMISSION_REQUESTED,
   BASH_PERMISSION_RESPONSE,
@@ -59,7 +62,7 @@ export interface SingleResult {
 }
 
 export interface SubagentDetails {
-  mode: "single";
+  mode: "single" | "parallel";
   projectAgentsDir: string | null;
   results: SingleResult[];
 }
@@ -97,6 +100,70 @@ function formatUsage(usage: UsageStats, model?: string): string {
   if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
   if (model) parts.push(model);
   return parts.join(" ");
+}
+
+// ── Parallel Execution Helpers ──────────────────────────────────────────────
+
+async function mapWithConcurrencyLimit<TIn, TOut>(
+  items: TIn[],
+  concurrency: number,
+  fn: (item: TIn, index: number) => Promise<TOut>,
+): Promise<TOut[]> {
+  if (items.length === 0) return [];
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results: TOut[] = new Array(items.length);
+  let nextIndex = 0;
+
+  const workers = new Array(limit).fill(null).map(async () => {
+    while (true) {
+      const current = nextIndex++;
+      if (current >= items.length) return;
+      results[current] = await fn(items[current], current);
+    }
+  });
+
+  await Promise.all(workers);
+  return results;
+}
+
+function loadConcurrencyConfig(cwd: string): number {
+  const DEFAULT = 4;
+
+  // Read user config
+  const userConfigPath = path.join(getAgentDir(), "pi-business.json");
+  let userConcurrency: number | undefined;
+  try {
+    const raw = fs.readFileSync(userConfigPath, "utf-8");
+    userConcurrency = JSON.parse(raw).maxConcurrency;
+  } catch { /* ignore */ }
+
+  // Read project config (overrides user)
+  const projectConfigDir = findNearestAncestorPath(cwd, ".pi", "pi-business.json");
+  let projectConcurrency: number | undefined;
+  if (projectConfigDir) {
+    try {
+      const raw = fs.readFileSync(projectConfigDir, "utf-8");
+      projectConcurrency = JSON.parse(raw).maxConcurrency;
+    } catch { /* ignore */ }
+  }
+
+  const resolved = projectConcurrency ?? userConcurrency ?? DEFAULT;
+  return Math.max(1, resolved);
+}
+
+function aggregateUsage(results: SingleResult[]): UsageStats {
+  const total: UsageStats = {
+    input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0,
+  };
+  for (const r of results) {
+    total.input += r.usage.input;
+    total.output += r.usage.output;
+    total.cacheRead += r.usage.cacheRead;
+    total.cacheWrite += r.usage.cacheWrite;
+    total.cost += r.usage.cost;
+    total.turns += r.usage.turns;
+  }
+  return total;
 }
 
 function resolveModel(
@@ -143,6 +210,7 @@ async function runSingleAgent(
   task: string,
   signal: AbortSignal | undefined,
   hostEvents?: EventBus | null,
+  onUpdate?: (partial: AgentToolResult<SubagentDetails>) => void,
 ): Promise<SingleResult> {
   const agent = agents.find((a) => a.name === agentName);
 
@@ -276,6 +344,19 @@ async function runSingleAgent(
     }
 
     // Collect messages and usage from events
+    const emitUpdate = () => {
+      if (onUpdate) {
+        onUpdate({
+          content: [{ type: "text", text: getFinalOutput(result.messages) || "(running...)" }],
+          details: {
+            mode: "single",
+            projectAgentsDir: null,
+            results: [result],
+          },
+        });
+      }
+    };
+
     const unsub = session.subscribe((event) => {
       if (event.type === "message_end" && event.message) {
         const msg = event.message;
@@ -293,6 +374,7 @@ async function runSingleAgent(
           if (!result.model && msg.model) result.model = msg.model;
           if (msg.stopReason) result.stopReason = msg.stopReason;
           if (msg.errorMessage) result.errorMessage = msg.errorMessage;
+          emitUpdate();
         }
       }
     });
@@ -347,13 +429,21 @@ export interface ListedAgentsDetails {
 
 // ── Parameter Schema ───────────────────────────────────────────────────────
 
+const TaskItem = Type.Object({
+  agent: Type.String({ description: "Name of the agent to invoke" }),
+  task: Type.String({ description: "Task to delegate to the agent" }),
+});
+
 const SubagentParams = Type.Object({
-  agent: Type.String({
+  agent: Type.Optional(Type.String({
     description: "Name of the agent to invoke",
-  }),
-  task: Type.String({
+  })),
+  task: Type.Optional(Type.String({
     description: "Task to delegate to the agent",
-  }),
+  })),
+  tasks: Type.Optional(Type.Array(TaskItem, {
+    description: "Array of {agent, task} for parallel execution",
+  })),
 });
 
 // ── Tool Registration ──────────────────────────────────────────────────────
@@ -368,17 +458,23 @@ export function initSubagentTool(pi: ExtensionAPI) {
       "Subagents are configured via markdown files in ~/.pi/agent/agents/ or .pi/agents/.",
     parameters: SubagentParams,
 
-    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params, signal, onUpdate, ctx) {
       const discovery = discoverAgents(ctx.cwd);
       const agents = discovery.agents;
 
-      const makeDetails = (results: SingleResult[]): SubagentDetails => ({
-        mode: "single",
-        projectAgentsDir: discovery.projectAgentsDir,
-        results,
-      });
+      const makeDetails = (mode: "single" | "parallel") =>
+        (results: SingleResult[]): SubagentDetails => ({
+          mode,
+          projectAgentsDir: discovery.projectAgentsDir,
+          results,
+        });
 
-      if (!params.agent || !params.task) {
+      // Mode detection & mutual exclusivity
+      const hasTasks = (params.tasks?.length ?? 0) > 0;
+      const hasSingle = Boolean(params.agent && params.task);
+      const modeCount = Number(hasTasks) + Number(hasSingle);
+
+      if (modeCount === 0) {
         const available =
           agents.map((a) => `${a.name} (${a.source})`).join(", ") ||
           "none";
@@ -386,20 +482,120 @@ export function initSubagentTool(pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: `Both "agent" and "task" are required.\nAvailable agents: ${available}`,
+              text: `Please provide either "agent" + "task" for single mode, or "tasks" array for parallel mode.\nAvailable agents: ${available}`,
             },
           ],
-          details: makeDetails([]),
+          details: makeDetails("single")([]),
         };
       }
 
+      if (modeCount > 1) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "Provide exactly one mode: either agent+task (single) OR tasks array (parallel), not both.",
+            },
+          ],
+          details: makeDetails("single")([]),
+        };
+      }
+
+      // ── Parallel mode ─────────────────────────────────────────────────
+      if (hasTasks) {
+        if (params.tasks!.length === 0) {
+          return {
+            content: [
+              {
+                type: "text",
+                text: "The 'tasks' array must contain at least one task.",
+              },
+            ],
+            details: makeDetails("parallel")([]),
+          };
+        }
+
+        const concurrency = loadConcurrencyConfig(ctx.cwd);
+
+        const allResults: SingleResult[] = new Array(params.tasks!.length);
+        for (let i = 0; i < params.tasks!.length; i++) {
+          allResults[i] = {
+            agent: params.tasks![i].agent,
+            agentSource: "unknown",
+            task: params.tasks![i].task,
+            exitCode: -1,
+            messages: [],
+            stderr: "",
+            usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 },
+          };
+        }
+
+        const emitParallelUpdate = () => {
+          if (onUpdate) {
+            const running = allResults.filter(r => r.exitCode === -1).length;
+            const done = allResults.filter(r => r.exitCode !== -1).length;
+            onUpdate({
+              content: [{ type: "text", text: `Parallel: ${done}/${allResults.length} done, ${running} running...` }],
+              details: makeDetails("parallel")([...allResults]),
+            });
+          }
+        };
+
+        const results = await mapWithConcurrencyLimit(params.tasks!, concurrency, async (t, index) => {
+          const taskOnUpdate = (partial: AgentToolResult<SubagentDetails>) => {
+            if (partial.details?.results[0]) {
+              allResults[index] = partial.details.results[0];
+              emitParallelUpdate();
+            }
+          };
+
+          const result = await runSingleAgent(
+            ctx,
+            agents,
+            t.agent,
+            t.task,
+            signal,
+            pi.events,
+            taskOnUpdate,
+          );
+          allResults[index] = result;
+          emitParallelUpdate();
+          return result;
+        });
+
+        const successCount = results.filter(r => r.exitCode === 0).length;
+        const anyFailed = results.some(r => r.exitCode !== 0);
+
+        const summaries = results.map(r => {
+          const output = getFinalOutput(r.messages);
+          const preview = output.length > 100
+            ? output.slice(0, 100) + "..."
+            : output;
+          const status = r.exitCode === 0
+            ? "completed"
+            : `failed: ${r.errorMessage || r.stderr || preview || "(no output)"}`;
+          return `[${r.agent}] ${status}`;
+        });
+
+        return {
+          content: [{
+            type: "text",
+            text: `Parallel: ${successCount}/${results.length} succeeded\n\n${summaries.join("\n\n")}`,
+          }],
+          details: makeDetails("parallel")(results),
+          isError: anyFailed ? true : undefined,
+        };
+      }
+
+      // ── Single mode ──────────────────────────────────────────────────
       const result = await runSingleAgent(
         ctx,
         agents,
-        params.agent,
-        params.task,
+        params.agent!,
+        params.task!,
         signal,
         pi.events,
+        onUpdate,
       );
 
       const isError =
@@ -420,7 +616,7 @@ export function initSubagentTool(pi: ExtensionAPI) {
               text: `Agent "${result.agent}" ${result.stopReason || "failed"}: ${errorMsg}`,
             },
           ],
-          details: makeDetails([result]),
+          details: makeDetails("single")([result]),
           isError: true,
         };
       }
@@ -437,11 +633,27 @@ export function initSubagentTool(pi: ExtensionAPI) {
               `${result.agent} (${result.agentSource}) · ${usageStr}`,
           },
         ],
-        details: makeDetails([result]),
+        details: makeDetails("single")([result]),
       };
     },
 
     renderCall(args, theme, _context) {
+      // Parallel mode
+      if (args.tasks && args.tasks.length > 0) {
+        let text =
+          theme.fg("toolTitle", theme.bold("subagent ")) +
+          theme.fg("accent", `parallel (${args.tasks.length} tasks)`);
+        for (const t of args.tasks.slice(0, 3)) {
+          const preview = t.task.length > 40 ? `${t.task.slice(0, 40)}...` : t.task;
+          text += `\n  ${theme.fg("accent", t.agent)}${theme.fg("dim", ` ${preview}`)}`;
+        }
+        if (args.tasks.length > 3) {
+          text += `\n  ${theme.fg("muted", `... +${args.tasks.length - 3} more`)}`;
+        }
+        return new Text(text, 0, 0);
+      }
+
+      // Single mode
       const agentName = args.agent || "...";
       const preview = args.task
         ? args.task.length > 60
@@ -468,6 +680,106 @@ export function initSubagentTool(pi: ExtensionAPI) {
         );
       }
 
+      // ── Parallel mode rendering ────────────────────────────────
+      if (details.mode === "parallel") {
+        const running = details.results.filter(r => r.exitCode === -1).length;
+        const successCount = details.results.filter(r => r.exitCode === 0).length;
+        const failCount = details.results.filter(r => r.exitCode > 0).length;
+        const isRunning = running > 0;
+        const icon = isRunning
+          ? theme.fg("warning", "⏳")
+          : failCount > 0
+            ? theme.fg("warning", "◐")
+            : theme.fg("success", "✓");
+        const status = isRunning
+          ? `${successCount + failCount}/${details.results.length} done, ${running} running`
+          : `${successCount}/${details.results.length} tasks`;
+
+        if (expanded && !isRunning) {
+          const mdTheme = getMarkdownTheme();
+          const container = new Container();
+          container.addChild(new Text(
+            `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`,
+            0, 0));
+          container.addChild(new Spacer(1));
+
+          for (const r of details.results) {
+            const rIcon = r.exitCode === 0
+              ? theme.fg("success", "✓")
+              : theme.fg("error", "✗");
+            container.addChild(new Text(
+              `${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`,
+              0, 0));
+            container.addChild(new Text(
+              `${theme.fg("muted", "Task: ")}${theme.fg("dim", r.task)}`,
+              0, 0));
+
+            const finalOutput = getFinalOutput(r.messages);
+            if (r.exitCode !== 0 && r.errorMessage) {
+              container.addChild(new Text(
+                theme.fg("error", `Error: ${r.errorMessage}`),
+                0, 0));
+            } else if (r.exitCode !== 0 && r.stderr) {
+              container.addChild(new Text(
+                theme.fg("error", r.stderr),
+                0, 0));
+            } else if (finalOutput) {
+              container.addChild(new Markdown(finalOutput.trim(), 0, 0, mdTheme));
+            } else {
+              container.addChild(new Text(theme.fg("muted", "(no output)"), 0, 0));
+            }
+
+            const usageStr = formatUsage(r.usage, r.model);
+            if (usageStr) {
+              container.addChild(new Text(theme.fg("dim", usageStr), 0, 0));
+            }
+            container.addChild(new Spacer(1));
+          }
+
+          const totalUsage = aggregateUsage(details.results);
+          const totalStr = formatUsage(totalUsage);
+          if (totalStr) {
+            container.addChild(new Text(theme.fg("dim", `Total: ${totalStr}`), 0, 0));
+          }
+          return container;
+        }
+
+        // Collapsed parallel
+        let text = `${icon} ${theme.fg("toolTitle", theme.bold("parallel "))}${theme.fg("accent", status)}`;
+        for (const r of details.results) {
+          const rIcon = r.exitCode === -1
+            ? theme.fg("warning", "⏳")
+            : r.exitCode === 0
+              ? theme.fg("success", "✓")
+              : theme.fg("error", "✗");
+          const finalOutput = getFinalOutput(r.messages);
+          const preview = finalOutput.length > 200
+            ? finalOutput.slice(0, 200) + "..."
+            : finalOutput;
+
+          text += `\n\n${theme.fg("muted", "─── ")}${theme.fg("accent", r.agent)} ${rIcon}`;
+          if (r.exitCode !== 0 && r.errorMessage) {
+            text += `\n${theme.fg("error", `Error: ${r.errorMessage}`)}`;
+          } else if (r.exitCode !== 0 && r.stderr) {
+            text += `\n${theme.fg("error", r.stderr)}`;
+          } else if (preview) {
+            text += `\n${theme.fg("toolOutput", preview)}`;
+          } else if (r.exitCode === -1) {
+            text += `\n${theme.fg("muted", "(running...)")}`;
+          } else {
+            text += `\n${theme.fg("muted", "(no output)")}`;
+          }
+        }
+        if (!isRunning) {
+          const totalUsage = aggregateUsage(details.results);
+          const totalStr = formatUsage(totalUsage);
+          if (totalStr) text += `\n\n${theme.fg("dim", `Total: ${totalStr}`)}`;
+        }
+        if (!expanded) text += `\n${theme.fg("muted", "(Ctrl+O to expand)")}`;
+        return new Text(text, 0, 0);
+      }
+
+      // ── Single mode rendering ───────────────────────────────────────
       const r = details.results[0];
       const isError =
         r.exitCode !== 0 ||

@@ -1,5 +1,5 @@
 ---
-name: pi-business-subagents
+name: pbe-subagents
 description: |
   Delegate work to builtin or custom subagents with single-agent, chain,
   parallel, async, forked-context, and intercom-coordinated workflows. Use
