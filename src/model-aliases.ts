@@ -17,7 +17,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { findNearestAncestorPath } from "./utils.js";
+import { findNearestAncestorPath } from "./utils";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

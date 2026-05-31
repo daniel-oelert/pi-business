@@ -10,6 +10,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import type { AgentConfig, AgentDiscoveryResult } from "../subagent-config";
+import {
+  DEFAULT_AGENTS_DIR,
+  MAX_DESCRIPTION_LENGTH,
+} from "../subagent-config";
 
 // ── Mocks ───────────────────────────────────────────────────────────────────
 
@@ -23,7 +27,7 @@ vi.mock("@earendil-works/pi-coding-agent", async () => {
   };
 });
 
-import { discoverAgents } from "../subagent-config";
+import { discoverAgents, shouldLoadDefaultAgents } from "../subagent-config";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -742,5 +746,211 @@ describe("discoverAgents — error resilience", () => {
     const result = discoverAgents(tmpDir);
     expect(result.agents).toEqual([]);
     expect(result.projectAgentsDir).toBeNull();
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// Builtin agents — discovery from extension's default-agents/ directory
+// ────────────────────────────────────────────────────────────────────────────
+
+describe("discoverAgents — builtin agents", () => {
+  let tmpDir: string;
+  let agentsDir: string;
+  let extensionDir: string;
+  let defaultAgentsDir: string;
+
+  beforeEach(() => {
+    tmpDir = path.join(os.tmpdir(), `pi-business-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    agentsDir = path.join(tmpDir, ".pi", "agents");
+    fs.mkdirSync(agentsDir, { recursive: true });
+
+    // Simulate extension directory with default-agents/
+    extensionDir = path.join(tmpDir, "extensions", "pi-business");
+    defaultAgentsDir = path.join(extensionDir, DEFAULT_AGENTS_DIR);
+    fs.mkdirSync(defaultAgentsDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("discovers builtin agents from extension's default-agents/", () => {
+    writeAgentMarkdown(defaultAgentsDir, "delegate.md",
+      { name: "delegate", description: "Builtin delegate" }, "Be efficient.");
+    writeAgentMarkdown(defaultAgentsDir, "scout.md",
+      { name: "scout", description: "Builtin scout" }, "Explore.");
+
+    const result = discoverAgents(agentsDir, {
+      extensionDir,
+      defaultAgents: true,
+    });
+
+    expect(result.agents).toHaveLength(2);
+    expect(result.agents[0].source).toBe("builtin");
+    expect(result.agents[0].name).toBe("delegate");
+    expect(result.agents[1].name).toBe("scout");
+  });
+
+  it("builtin agents have lowest priority (project overrides builtin)", () => {
+    writeAgentMarkdown(defaultAgentsDir, "scout.md",
+      { name: "scout", description: "Builtin scout", model: "alias/light" }, "Builtin body.");
+    writeAgentMarkdown(agentsDir, "scout.md",
+      { name: "scout", description: "Project scout override", model: "alias/medium" }, "Project body.");
+
+    const result = discoverAgents(agentsDir, {
+      extensionDir,
+      defaultAgents: true,
+    });
+
+    const scout = result.agents.find((a) => a.name === "scout");
+    expect(scout).toBeDefined();
+    expect(scout!.source).toBe("project");
+    expect(scout!.description).toBe("Project scout override");
+    expect(scout!.model).toBe("alias/medium");
+  });
+
+  it("omits builtin agents when defaultAgents option is false", () => {
+    writeAgentMarkdown(defaultAgentsDir, "scout.md",
+      { name: "scout", description: "Builtin scout" }, "Builtin body.");
+    writeAgentMarkdown(agentsDir, "custom.md",
+      { name: "custom", description: "Project agent" }, "Project body.");
+
+    const result = discoverAgents(agentsDir, {
+      extensionDir,
+      defaultAgents: false,
+    });
+
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].name).toBe("custom");
+    expect(result.agents[0].source).toBe("project");
+  });
+
+  it("omits builtin agents when no extensionDir is provided", () => {
+    writeAgentMarkdown(defaultAgentsDir, "scout.md",
+      { name: "scout", description: "Builtin scout" }, "Builtin body.");
+    writeAgentMarkdown(agentsDir, "custom.md",
+      { name: "custom", description: "Project agent" }, "Project body.");
+
+    const result = discoverAgents(agentsDir, {
+      defaultAgents: true,
+      // No extensionDir provided
+    });
+
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].name).toBe("custom");
+  });
+
+  it("includes only project agents when extensionDir doesn't exist", () => {
+    writeAgentMarkdown(agentsDir, "custom.md",
+      { name: "custom", description: "Project agent" }, "Project body.");
+
+    const nonExistentExt = path.join(tmpDir, "does-not-exist");
+    const result = discoverAgents(agentsDir, {
+      extensionDir: nonExistentExt,
+      defaultAgents: true,
+    });
+
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].name).toBe("custom");
+  });
+
+  it("builtin agents with source 'builtin' have correct filePath", () => {
+    writeAgentMarkdown(defaultAgentsDir, "worker.md",
+      { name: "worker", description: "Builtin worker" }, "Implement.");
+
+    const result = discoverAgents(agentsDir, {
+      extensionDir,
+      defaultAgents: true,
+    });
+
+    expect(result.agents).toHaveLength(1);
+    expect(result.agents[0].source).toBe("builtin");
+    expect(path.isAbsolute(result.agents[0].filePath)).toBe(true);
+    expect(result.agents[0].filePath).toContain("worker.md");
+    expect(result.agents[0].filePath).toContain(DEFAULT_AGENTS_DIR);
+  });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+// shouldLoadDefaultAgents — config file reading
+// ────────────────────────────────────────────────────────────────────────────
+
+describe("shouldLoadDefaultAgents", () => {
+  let tmpDir: string;
+  let extensionDir: string;
+
+  beforeEach(() => {
+    tmpDir = path.join(os.tmpdir(), `pi-business-test-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
+    fs.mkdirSync(tmpDir, { recursive: true });
+    extensionDir = path.join(tmpDir, "extensions", "pi-business");
+    fs.mkdirSync(extensionDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("returns true by default (no config file)", () => {
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(true);
+  });
+
+  it("returns false when project-level pi-business.json has defaultAgents: false", () => {
+    const piDir = path.join(tmpDir, ".pi");
+    fs.mkdirSync(piDir);
+    fs.writeFileSync(path.join(piDir, "pi-business.json"), JSON.stringify({ defaultAgents: false }));
+
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(false);
+  });
+
+  it("returns true when project-level pi-business.json has defaultAgents: true", () => {
+    const piDir = path.join(tmpDir, ".pi");
+    fs.mkdirSync(piDir);
+    fs.writeFileSync(path.join(piDir, "pi-business.json"), JSON.stringify({ defaultAgents: true }));
+
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(true);
+  });
+
+  it("handles non-boolean defaultAgents value gracefully (truthy)", () => {
+    const piDir = path.join(tmpDir, ".pi");
+    fs.mkdirSync(piDir);
+    fs.writeFileSync(path.join(piDir, "pi-business.json"), JSON.stringify({ defaultAgents: 1 }));
+
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(true); // Boolean(1) = true
+  });
+
+  it("handles invalid JSON gracefully (defaults to true)", () => {
+    const piDir = path.join(tmpDir, ".pi");
+    fs.mkdirSync(piDir);
+    fs.writeFileSync(path.join(piDir, "pi-business.json"), "not valid json!!!!");
+
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(true);
+  });
+
+  it("project config overrides user config for defaultAgents", () => {
+    // User config is mocked at /mock/user/pi/agent/pi-business.json
+    // which we can't write to. But the merging logic (project overrides user)
+    // is the same as for other config fields.
+    // This test just verifies project config takes effect.
+    const piDir = path.join(tmpDir, ".pi");
+    fs.mkdirSync(piDir);
+    fs.writeFileSync(path.join(piDir, "pi-business.json"), JSON.stringify({ defaultAgents: false }));
+
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(false);
+  });
+
+  it("returns true when defaultAgents is not set in config", () => {
+    const piDir = path.join(tmpDir, ".pi");
+    fs.mkdirSync(piDir);
+    fs.writeFileSync(path.join(piDir, "pi-business.json"), JSON.stringify({ maxConcurrency: 8 }));
+
+    const result = shouldLoadDefaultAgents(tmpDir);
+    expect(result).toBe(true);
   });
 });

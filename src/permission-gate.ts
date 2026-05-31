@@ -24,7 +24,7 @@ import { join } from "node:path";
 import { initUI } from "./ui";
 import type { BashPermissionRequestedEvent, BashPermissionResponseEvent} from "./types";
 import { BASH_PERMISSION_REQUESTED, BASH_PERMISSION_RESPONSE } from "./types";
-import { findNearestAncestorPath } from "./utils.js";
+import { findNearestAncestorPath } from "./utils";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 

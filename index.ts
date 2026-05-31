@@ -7,7 +7,8 @@ import { initModelAliases } from "./src/model-aliases";
 import { initQuestionTool } from "./src/question-tool";
 
 export default function (pi: ExtensionAPI) {
-    const skillsDir = join(dirname(fileURLToPath(import.meta.url)), "skills");
+    const extensionDir = dirname(fileURLToPath(import.meta.url));
+    const skillsDir = join(extensionDir, "skills");
 
     pi.on("resources_discover", async (event, _ctx) => {
     return {
@@ -19,6 +20,6 @@ export default function (pi: ExtensionAPI) {
     
     initModelAliases(pi);
     permissionGateInit(pi);
-    initSubagentTool(pi);
+    initSubagentTool(pi, extensionDir);
     initQuestionTool(pi);
 }

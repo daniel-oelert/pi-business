@@ -27,9 +27,9 @@ import { Type } from "typebox";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-import { type AgentConfig, discoverAgents } from "./subagent-config";
+import { type AgentConfig, discoverAgents, shouldLoadDefaultAgents } from "./subagent-config";
 import { resolveAliasTarget } from "./model-aliases";
-import { findNearestAncestorPath } from "./utils.js";
+import { findNearestAncestorPath } from "./utils";
 import {
   BASH_PERMISSION_REQUESTED,
   BASH_PERMISSION_RESPONSE,
@@ -50,7 +50,7 @@ export interface UsageStats {
 
 export interface SingleResult {
   agent: string;
-  agentSource: "user" | "project" | "unknown";
+  agentSource: "user" | "project" | "builtin" | "unknown";
   task: string;
   exitCode: number;
   messages: any[];
@@ -418,7 +418,7 @@ async function runSingleAgent(
 export interface ListedAgent {
   name: string;
   description: string;
-  source: "user" | "project";
+  source: "user" | "project" | "builtin";
   model?: string;
 }
 
@@ -448,18 +448,33 @@ const SubagentParams = Type.Object({
 
 // ── Tool Registration ──────────────────────────────────────────────────────
 
-export function initSubagentTool(pi: ExtensionAPI) {
+export function initSubagentTool(pi: ExtensionAPI, extensionDir: string) {
+
+  /**
+   * Resolve discovery options for the current session context.
+   * Reads pi-business.json to determine whether builtin agents are enabled.
+   */
+  function getDiscoveryOptions(cwd: string): {
+    extensionDir: string;
+    defaultAgents: boolean;
+  } {
+    return {
+      extensionDir,
+      defaultAgents: shouldLoadDefaultAgents(cwd),
+    };
+  }
 
   pi.registerTool({
     name: "subagent",
     label: "Subagent",
     description:
       "Delegate a task to a specialized subagent with an isolated context window. " +
-      "Subagents are configured via markdown files in ~/.pi/agent/agents/ or .pi/agents/.",
+      "Subagents are configured via markdown files in ~/.pi/agent/agents/ or .pi/agents/. " +
+      "Builtin agents can be disabled in pi-business.json with `{ \"defaultAgents\": false }`.",
     parameters: SubagentParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const discovery = discoverAgents(ctx.cwd);
+      const discovery = discoverAgents(ctx.cwd, getDiscoveryOptions(ctx.cwd));
       const agents = discovery.agents;
 
       const makeDetails = (mode: "single" | "parallel") =>
@@ -863,7 +878,7 @@ export function initSubagentTool(pi: ExtensionAPI) {
     parameters: ListSubagentsParams,
 
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
-      const discovery = discoverAgents(ctx.cwd);
+      const discovery = discoverAgents(ctx.cwd, getDiscoveryOptions(ctx.cwd));
       const agents = discovery.agents;
 
       const listed = agents.map((a) => ({
@@ -875,7 +890,7 @@ export function initSubagentTool(pi: ExtensionAPI) {
 
       if (listed.length === 0) {
         return {
-          content: [{ type: "text", text: "No subagents found. Create agent markdown files in ~/.pi/agent/agents/ or .pi/agents/." }],
+          content: [{ type: "text", text: "No subagents found. Create agent markdown files in ~/.pi/agent/agents/, .pi/agents/, or check that builtin agents are enabled in pi-business.json." }],
           details: { agents: [], projectAgentsDir: discovery.projectAgentsDir } satisfies ListedAgentsDetails,
         };
       }

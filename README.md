@@ -92,8 +92,16 @@ Subagents are configured as Markdown files with YAML frontmatter.
 
 | Location | Scope |
 |---|---|
+| `<ext>/default-agents/*.md` | Builtin (lowest, can be disabled) |
 | `~/.pi/agent/agents/*.md` | User-level |
-| `.pi/agents/*.md` | Project-level (overrides user) |
+| `.pi/agents/*.md` | Project-level (highest priority) |
+
+Precedence: project > user > builtin.
+
+Builtin agents can be disabled in pi-business.json:
+```json
+{ "defaultAgents": false }
+```
 
 **Usage from within pi:**
 
