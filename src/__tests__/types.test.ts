@@ -20,14 +20,14 @@ import type {
 } from "../types";
 
 describe("Event constants", () => {
-  it("BASH_PERMISSION_REQUESTED uses correct pibusiness prefix", () => {
-    expect(BASH_PERMISSION_REQUESTED).toBe("pibusiness:bash_permission_requested");
-    expect(BASH_PERMISSION_REQUESTED.startsWith("pibusiness:")).toBe(true);
+  it("BASH_PERMISSION_REQUESTED uses correct pbe prefix", () => {
+    expect(BASH_PERMISSION_REQUESTED).toBe("pbe:bash_permission_requested");
+    expect(BASH_PERMISSION_REQUESTED.startsWith("pbe:")).toBe(true);
   });
 
-  it("BASH_PERMISSION_RESPONSE uses correct pibusiness prefix", () => {
-    expect(BASH_PERMISSION_RESPONSE).toBe("pibusiness:bash_permission_response");
-    expect(BASH_PERMISSION_RESPONSE.startsWith("pibusiness:")).toBe(true);
+  it("BASH_PERMISSION_RESPONSE uses correct pbe prefix", () => {
+    expect(BASH_PERMISSION_RESPONSE).toBe("pbe:bash_permission_response");
+    expect(BASH_PERMISSION_RESPONSE.startsWith("pbe:")).toBe(true);
   });
 
   it("request and response are different constants", () => {
@@ -120,14 +120,14 @@ describe("Event round-trip consistency", () => {
 // ── Question Event Constants ─────────────────────────────────────────────
 
 describe("Question event constants", () => {
-  it("QUESTION_REQUESTED uses correct pibusiness prefix", () => {
-    expect(QUESTION_REQUESTED).toBe("pibusiness:question_requested");
-    expect(QUESTION_REQUESTED.startsWith("pibusiness:")).toBe(true);
+  it("QUESTION_REQUESTED uses correct pbe prefix", () => {
+    expect(QUESTION_REQUESTED).toBe("pbe:question_requested");
+    expect(QUESTION_REQUESTED.startsWith("pbe:")).toBe(true);
   });
 
-  it("QUESTION_RESPONSE uses correct pibusiness prefix", () => {
-    expect(QUESTION_RESPONSE).toBe("pibusiness:question_response");
-    expect(QUESTION_RESPONSE.startsWith("pibusiness:")).toBe(true);
+  it("QUESTION_RESPONSE uses correct pbe prefix", () => {
+    expect(QUESTION_RESPONSE).toBe("pbe:question_response");
+    expect(QUESTION_RESPONSE.startsWith("pbe:")).toBe(true);
   });
 
   it("request and response are different constants", () => {
