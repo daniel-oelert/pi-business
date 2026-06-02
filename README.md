@@ -9,6 +9,8 @@ productivity-focused features for professional development workflows.
 
 Map short, memorable names to full provider/model strings. Use `alias/light`
 instead of remembering `openrouter/deepseek/deepseek-v4-flash`.
+Especially useful for collaboration. Every developer can specify their own models for the given aliases 
+in a config file in their user folder. 
 
 **Configuration files** (JSON):
 
@@ -67,9 +69,7 @@ becomes `provider=openrouter`, `model=deepseek/deepseek-v4-flash`.
 Prompts for confirmation before running potentially dangerous bash commands.
 Protects against accidental destructive operations.
 
-**Commands intercepted:** `rm -rf`, `sudo`, `chmod`/`chown 777`
-
-When a dangerous command is detected, a confirmation dialog appears:
+By default every command is intercepted. Custom patterns to always allow certain commands can be set in the configuration file.
 
 ```
 Bash command requested:
@@ -161,5 +161,5 @@ pi
 
 ## Development
 
-The extension is built in TypeScript and uses the pi SDK (`@mariozechner/pi-coding-agent`).
+The extension is built in TypeScript and uses the pi SDK (`@earendil-works/pi-coding-agent`).
 Entry point is `index.ts`, which wires up all three features via pi lifecycle hooks.
